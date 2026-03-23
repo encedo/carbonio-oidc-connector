@@ -210,12 +210,32 @@ See [`config.json.example`](config.json.example).
 
 ## Building a release package
 
+### Tarball (manual deployment)
+
 ```bash
 bash build.sh
 # creates: carbonio-oidc-connector-1.0.0.tar.gz
 ```
 
-The tarball contains all files needed for manual deployment (no git history, no dev files).
+### Debian package
+
+```bash
+bash build-deb.sh
+# creates: carbonio-oidc-connector_1.0.0_all.deb
+
+sudo dpkg -i carbonio-oidc-connector_1.0.0_all.deb
+sudo editor /opt/zextras/oidc/config.json
+sudo systemctl start carbonio-oidc
+```
+
+The `.deb` package:
+- installs all files to their target paths
+- sets `zextras:zextras` ownership and permissions
+- enables the systemd service (does not start it — configure first)
+- reloads nginx on install and on removal
+- preserves `config.json` across upgrades (`dpkg-deb` treats it as a conffile)
+
+Remove: `sudo dpkg -r carbonio-oidc-connector`
 
 ---
 
