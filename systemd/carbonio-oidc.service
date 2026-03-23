@@ -1,0 +1,18 @@
+[Unit]
+Description=Carbonio OIDC Connector (Encedo)
+After=network.target
+
+[Service]
+Type=simple
+User=zextras
+Group=zextras
+WorkingDirectory=/opt/zextras/oidc
+ExecStart=/usr/bin/python3 /opt/zextras/oidc/server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=null
+StandardError=null
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

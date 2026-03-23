@@ -1,0 +1,30 @@
+{
+  "_comment": "carbonio-oidc-connector config — restart service after changes.",
+
+  "port": 8754,
+  "host": "127.0.0.1",
+  "log_file": "/var/log/carbonio-oidc.log",
+  "log_level": "INFO",
+  "session_ttl_seconds": 300,
+  "_session_secret_note": "reserved for future use — not currently required",
+
+  "carbonio_base_url": "https://mail.example.com",
+  "login_redirect": "/carbonio/",
+
+  "oidc_discovery_url": "https://your-oidc-provider/.well-known/openid-configuration",
+  "oidc_client_id": "your-client-id",
+  "oidc_client_secret": "your-client-secret",
+  "oidc_redirect_uri": "https://mail.example.com/oidc/callback",
+  "oidc_scopes": ["openid", "email", "profile"],
+
+  "button_label": "Login with Encedo HSM",
+
+  "domains": {
+    "encedo.com": {
+      "preauth_key": "REPLACE_WITH: su - zextras -c 'carbonio prov gd yourdomain.com zimbraPreAuthKey'"
+    }
+  },
+
+  "account_claim": "email",
+  "account_claim_fallback": "preferred_username"
+}
