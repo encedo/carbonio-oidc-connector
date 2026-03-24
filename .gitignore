@@ -3,3 +3,5 @@ __pycache__/
 *.pyo
 config.json
 CLAUDE.md
+carbonio-login-ui-fork/
+*.deb

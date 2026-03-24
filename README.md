@@ -2,7 +2,12 @@
 
 OIDC Relying Party sidecar for [Carbonio CE](https://www.zextras.com/carbonio/) (open-source mail server based on Zimbra).
 
-Adds **SSO login via any OIDC Provider** as an alternative to username/password — without modifying Carbonio files and without breaking existing authentication. Survives `apt upgrade` of all Carbonio packages.
+Adds **SSO login via any OIDC Provider** as an alternative to username/password — without breaking existing authentication. Survives `apt upgrade carbonio-proxy`.
+
+The login button is provided by a companion fork of `carbonio-login-ui`:
+**[github.com/encedo/carbonio-login-ui](https://github.com/encedo/carbonio-login-ui)**
+The button appears only when this connector is running (`/oidc/health` returns 200).
+If the connector is down, the login page is identical to the standard Carbonio CE login.
 
 ---
 
@@ -12,7 +17,9 @@ Adds **SSO login via any OIDC Provider** as an alternative to username/password 
 Browser                nginx              sidecar (Python)        OIDC Provider
   |                      |                      |                       |
   |-- GET /static/login/ |                      |                       |
-  |<-- HTML + OIDC button (sub_filter injects <a href="/oidc/authorize">)
+  |<-- login page (carbonio-login-ui fork, button shown if /oidc/health OK)
+  |-- GET /oidc/health   |--------------------->|                       |
+  |<-- {"status":"ok"}   |                      |                       |
   |                      |                      |                       |
   |-- GET /oidc/authorize|--------------------->|                       |
   |                      |    PKCE S256 + state |                       |
@@ -157,7 +164,7 @@ All configuration is in `/opt/zextras/oidc/config.json` (chmod 640, owner zextra
 | `oidc_client_secret` | yes | — | Client secret (used in token exchange, `client_secret_post`) |
 | `oidc_redirect_uri` | yes | — | Must be `https://your-carbonio/oidc/callback` |
 | `oidc_scopes` | no | `["openid","email","profile"]` | Requested OIDC scopes |
-| `button_label` | no | — | Login button label (informational, currently hardcoded in nginx) |
+| `button_label` | no | — | Login button label (informational, label is set in the login-ui fork) |
 | `domains` | yes | — | Map of domain → `preauth_key` (see below) |
 | `account_claim` | no | `email` | JWT claim used as Carbonio account (must be `user@domain.com`) |
 | `account_claim_fallback` | no | `preferred_username` | Fallback claim if primary is missing |
@@ -200,7 +207,7 @@ See [`config.json.example`](config.json.example).
 
 /opt/zextras/conf/nginx/extensions/
   ├── upstream-oidc.conf   # upstream oidc_connector { server 127.0.0.1:8754; }
-  └── backend-oidc.conf    # location /oidc/ + sub_filter for login button
+  └── backend-oidc.conf    # location /oidc/ proxy only
 
 /etc/systemd/system/carbonio-oidc.service
 /var/log/carbonio-oidc.log
