@@ -4,6 +4,7 @@ Carbonio OIDC Connector - /oidc/callback handler.
 Completes the Authorization Code + PKCE flow and issues Zimbra PreAuth redirect.
 """
 
+import html
 import http.server
 import json
 import logging
@@ -157,11 +158,12 @@ def handle_callback(handler: http.server.BaseHTTPRequestHandler, app_config: dic
 
 def _error(handler: http.server.BaseHTTPRequestHandler, code: int, message: str) -> None:
     logger.error("callback error %s: %s", code, message)
+    safe_message = html.escape(message)
     body = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<title>OIDC Error</title></head><body>"
         f"<h2>OIDC Login Error</h2>"
-        f"<p>{message}</p>"
+        f"<p>{safe_message}</p>"
         f'<p><a href="/login/">Back to login</a></p>'
         "</body></html>"
     ).encode("utf-8")

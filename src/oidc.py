@@ -6,6 +6,7 @@ Initiates OIDC Authorization Code flow with PKCE S256.
 
 import base64
 import hashlib
+import html
 import http.server
 import logging
 import secrets
@@ -79,9 +80,10 @@ def handle_authorize(handler: http.server.BaseHTTPRequestHandler, app_config: di
 
 def _error(handler: http.server.BaseHTTPRequestHandler, code: int, message: str) -> None:
     logger.error("authorize error %s: %s", code, message)
+    safe_message = html.escape(message)
     body = (
         f"<!DOCTYPE html><html><body>"
-        f"<h2>OIDC Error</h2><p>{message}</p>"
+        f"<h2>OIDC Error</h2><p>{safe_message}</p>"
         f'<p><a href="/login/">Back to login</a></p>'
         f"</body></html>"
     ).encode("utf-8")

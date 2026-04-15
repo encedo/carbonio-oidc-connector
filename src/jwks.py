@@ -13,6 +13,7 @@ import json
 import logging
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 from cryptography.exceptions import InvalidSignature
@@ -80,19 +81,31 @@ def _load_key(jwk: dict):
 
 
 def _raw_ecdsa_to_der(raw_sig: bytes) -> bytes:
-    """Convert JWT raw ECDSA signature (r || s) to DER-encoded form."""
+    """Convert JWT raw ECDSA signature (r || s) to DER-encoded form.
+
+    RFC 7518 §3.4: raw signature is r || s, each zero-padded to the key size.
+    ES512 (P-521) produces a body > 127 bytes, requiring DER long-form length.
+    """
     half = len(raw_sig) // 2
     r = int.from_bytes(raw_sig[:half], "big")
     s = int.from_bytes(raw_sig[half:], "big")
 
     def _encode_int(n: int) -> bytes:
-        b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        # max(1, ...) guards against n == 0 (theoretically invalid but prevents IndexError)
+        b = n.to_bytes(max(1, (n.bit_length() + 7) // 8), "big")
         if b[0] & 0x80:
             b = b"\x00" + b
         return bytes([0x02, len(b)]) + b
 
     body = _encode_int(r) + _encode_int(s)
-    return bytes([0x30, len(body)]) + body
+    body_len = len(body)
+    # DER length: short form for < 128 bytes, long form (0x81 + 1 byte) otherwise.
+    # P-521 body can reach ~138 bytes; we never exceed 255 so one extra byte suffices.
+    if body_len < 128:
+        length_enc = bytes([body_len])
+    else:
+        length_enc = bytes([0x81, body_len])
+    return bytes([0x30]) + length_enc + body
 
 
 def _verify_sig(public_key, alg: str, sig_bytes: bytes, signing_input: bytes) -> None:
@@ -111,8 +124,26 @@ def _verify_sig(public_key, alg: str, sig_bytes: bytes, signing_input: bytes) ->
         raise ValueError(f"Unsupported algorithm: {alg!r}")
 
 
+def _parse_and_load_keys(data: dict) -> dict:
+    """Parse a JWKS document dict and return {kid: public_key} for supported keys."""
+    result: dict = {}
+    for jwk in data.get("keys", []):
+        kid = jwk.get("kid", "default")
+        try:
+            key = _load_key(jwk)
+            if key is None:
+                logger.warning("JWKS: skipping unsupported key kty=%s crv=%s kid=%s",
+                               jwk.get("kty"), jwk.get("crv"), kid)
+                continue
+            result[kid] = key
+            logger.info("JWKS: loaded key kid=%s kty=%s", kid, jwk.get("kty"))
+        except Exception as e:
+            logger.error("JWKS: failed to load key kid=%s: %s", kid, e)
+    return result
+
+
 def _fetch_jwks(jwks_uri: str) -> None:
-    """Fetch JWKS and populate key cache."""
+    """Fetch full JWKS and replace key cache."""
     logger.info("Fetching JWKS from %s", jwks_uri)
     try:
         req = urllib.request.Request(jwks_uri, headers={"Accept": "application/json"})
@@ -122,19 +153,7 @@ def _fetch_jwks(jwks_uri: str) -> None:
         logger.error("JWKS fetch failed: %s", e)
         return
 
-    new_cache: dict = {}
-    for jwk in data.get("keys", []):
-        kid = jwk.get("kid", "default")
-        try:
-            key = _load_key(jwk)
-            if key is None:
-                logger.warning("JWKS: skipping unsupported key kty=%s crv=%s kid=%s",
-                               jwk.get("kty"), jwk.get("crv"), kid)
-                continue
-            new_cache[kid] = key
-            logger.info("JWKS: loaded key kid=%s kty=%s", kid, jwk.get("kty"))
-        except Exception as e:
-            logger.error("JWKS: failed to load key kid=%s: %s", kid, e)
+    new_cache = _parse_and_load_keys(data)
 
     global _cache_expires_at
     with _cache_lock:
@@ -143,6 +162,45 @@ def _fetch_jwks(jwks_uri: str) -> None:
         _cache_expires_at = time.monotonic() + _CACHE_TTL
 
     logger.info("JWKS cache updated (%d keys)", len(new_cache))
+
+
+def _fetch_single_key(jwks_uri: str, kid: str) -> None:
+    """Fetch a single key via ?kid=<kid> and merge it into the cache.
+
+    VENDOR-SPECIFIC BEHAVIOUR: the ?kid= query parameter is NOT part of the
+    OIDC/JWKS standard (RFC 7517).  It is supported by Encedo HSM and some
+    custom OIDC providers, but most mainstream providers (Keycloak, Microsoft
+    Entra ID, Google, Auth0, Okta) simply ignore it and return the full keyset.
+    Either way the response is handled correctly — _parse_and_load_keys accepts
+    any number of keys and merges them into the cache.
+
+    If your OIDC provider returns HTTP 4xx on an unrecognised query parameter,
+    comment out the 3 lines below marked [VENDOR-SPECIFIC] and uncomment the
+    _fetch_jwks() fallback line to always fetch the full keyset instead.
+    """
+    # [VENDOR-SPECIFIC] build URL with ?kid= — comment out these 3 lines and
+    # replace with: url = jwks_uri  to fall back to a full-keyset fetch.
+    sep = "&" if "?" in jwks_uri else "?"
+    url = f"{jwks_uri}{sep}kid={urllib.parse.quote(kid, safe='')}"
+    # [VENDOR-SPECIFIC end]
+    logger.info("Fetching single JWKS key kid=%r from %s", kid, url)
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        logger.error("JWKS single-key fetch failed (kid=%r): %s", kid, e)
+        return
+
+    loaded = _parse_and_load_keys(data)
+    if not loaded:
+        logger.warning("JWKS single-key response contained no usable keys (kid=%r)", kid)
+        return
+
+    with _cache_lock:
+        _cache.update(loaded)
+
+    logger.info("JWKS cache: merged %d key(s) from single-key fetch", len(loaded))
 
 
 def prefetch(jwks_uri: str) -> None:
@@ -193,6 +251,13 @@ def verify_id_token(id_token: str, jwks_uri: str, expected_issuer: str, client_i
 
     public_key = keys.get(kid)
     if public_key is None:
+        # Unknown kid — OP may have rotated keys; fetch just this key and retry.
+        logger.info("Unknown kid=%r — fetching single key from JWKS endpoint", kid)
+        _fetch_single_key(jwks_uri, kid)
+        with _cache_lock:
+            keys = dict(_cache)
+        public_key = keys.get(kid)
+    if public_key is None:
         raise ValueError(f"No JWKS key for kid={kid!r}")
 
     signing_input = f"{header_b64}.{payload_b64}".encode()
@@ -203,10 +268,15 @@ def verify_id_token(id_token: str, jwks_uri: str, expected_issuer: str, client_i
         raise ValueError("id_token signature verification failed")
 
     # Validate claims
+    _CLOCK_SKEW = 60  # seconds — tolerance for clock drift between parties
     now = time.time()
     exp = payload.get("exp")
-    if exp is None or now > exp:
+    if exp is None or now > exp + _CLOCK_SKEW:
         raise ValueError(f"id_token expired (exp={exp}, now={int(now)})")
+
+    nbf = payload.get("nbf")
+    if nbf is not None and now < nbf - _CLOCK_SKEW:
+        raise ValueError(f"id_token not yet valid (nbf={nbf}, now={int(now)})")
 
     iss = payload.get("iss")
     if iss != expected_issuer:

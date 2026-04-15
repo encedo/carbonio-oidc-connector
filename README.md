@@ -255,6 +255,7 @@ Remove: `sudo dpkg -r carbonio-oidc-connector`
 | [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) — OAuth 2.0 | Authorization Code grant, token endpoint |
 | [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) — OAuth Discovery | `/.well-known/openid-configuration` |
 | [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517) — JWK | JWKS endpoint, Ed25519 public key (`OKP` / `crv: Ed25519`) |
+| `?kid=` on JWKS URI | **Vendor-specific** (not in RFC 7517) — supported by Encedo HSM; Keycloak, Entra ID, Google and others ignore it and return the full keyset. Both behaviours are handled correctly. If your provider returns HTTP 4xx on an unknown query parameter, see the comment in `src/jwks.py` (`_fetch_single_key`) for the one-line fallback. |
 | [RFC 7519](https://datatracker.ietf.org/doc/html/rfc7519) — JWT | id_token parsing, `exp` / `iss` / `aud` validation |
 | [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037) — OKP JWK | Ed25519 key representation in JWKS |
 
