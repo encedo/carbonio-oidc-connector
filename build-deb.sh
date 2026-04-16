@@ -78,10 +78,10 @@ case "$1" in
         systemctl daemon-reload
         systemctl enable carbonio-oidc
 
-        # On upgrade the service was stopped by prerm — restart it.
-        # On fresh install do not start — user must configure config.json first.
-        if [ -n "$2" ]; then
-            # $2 is set to the old version string during upgrade
+        # On upgrade: restore previous running state (prerm saved it via flag file).
+        # On fresh install: do not start — user must configure config.json first.
+        if [ -f /run/carbonio-oidc-was-active ]; then
+            rm -f /run/carbonio-oidc-was-active
             systemctl start carbonio-oidc
             echo "carbonio-oidc-connector: service restarted."
         fi
@@ -107,7 +107,13 @@ NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
 case "$1" in
     upgrade)
-        # On upgrade: just stop the service — nginx confs stay in place
+        # On upgrade: remember if service was active, then stop it.
+        # postinst will restore the state using the flag file.
+        if systemctl is-active --quiet carbonio-oidc; then
+            touch /run/carbonio-oidc-was-active
+        else
+            rm -f /run/carbonio-oidc-was-active
+        fi
         systemctl stop carbonio-oidc 2>/dev/null || true
         ;;
     remove|purge|deconfigure)
