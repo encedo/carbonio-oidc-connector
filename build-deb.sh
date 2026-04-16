@@ -72,9 +72,16 @@ case "$1" in
         touch /var/log/carbonio-oidc.log
         chown zextras:zextras /var/log/carbonio-oidc.log
 
-        # Enable systemd service (do not start — user must configure first)
+        # Clear Python bytecode cache so the new .py files are picked up
+        rm -rf "${OIDC_DIR}/__pycache__"
+
+        # Enable and restart if already running (upgrade), otherwise just enable
         systemctl daemon-reload
         systemctl enable carbonio-oidc
+        if systemctl is-active --quiet carbonio-oidc; then
+            systemctl restart carbonio-oidc
+            echo "carbonio-oidc-connector: service restarted."
+        fi
 
         # Reload nginx
         if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
