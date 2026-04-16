@@ -46,13 +46,18 @@ EOF
 # --- DEBIAN/postinst ---
 cat > "${ROOT}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
-set -e
+# No set -e: every critical command handles errors explicitly.
 
 OIDC_DIR="/opt/zextras/oidc"
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
 case "$1" in
     configure)
+        # Detect fresh install BEFORE we potentially create config.json.
+        # On a fresh install config.json does not yet exist; on upgrade it does.
+        FRESH_INSTALL=0
+        [ ! -f "${OIDC_DIR}/config.json" ] && FRESH_INSTALL=1
+
         # Set ownership and permissions
         chown -R zextras:zextras "${OIDC_DIR}"
         chmod 750 "${OIDC_DIR}"
@@ -61,7 +66,7 @@ case "$1" in
         chown zextras:zextras "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
 
         # Install config.json if not already present
-        if [ ! -f "${OIDC_DIR}/config.json" ]; then
+        if [ "$FRESH_INSTALL" = "1" ]; then
             cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
             chmod 640 "${OIDC_DIR}/config.json"
             chown zextras:zextras "${OIDC_DIR}/config.json"
@@ -78,19 +83,15 @@ case "$1" in
         systemctl daemon-reload
         systemctl enable carbonio-oidc
 
-        # On upgrade: restore previous running state.
-        # - New prerm sets /run/carbonio-oidc-was-active when service was active.
-        # - Old prerm (or missing prerm) may not set the flag, so fall back to
-        #   detecting an upgrade via $2 (previous version string) and start anyway.
-        # On fresh install ($2 is empty): do not start — user must configure first.
-        if [ -f /run/carbonio-oidc-was-active ]; then
-            rm -f /run/carbonio-oidc-was-active
-            systemctl start carbonio-oidc
+        # On upgrade: always restart.  We detect upgrade by the presence of
+        # config.json (checked before we may have just created it above).
+        # On fresh install: do not start — user must configure config.json first.
+        # Also honour flag left by prerm for edge cases (e.g. same-version reinstall
+        # on systems where dpkg passes empty $2 to postinst configure).
+        rm -f /run/carbonio-oidc-was-active
+        if [ "$FRESH_INSTALL" = "0" ]; then
+            systemctl restart carbonio-oidc || true
             echo "carbonio-oidc-connector: service restarted."
-        elif [ -n "$2" ]; then
-            # Upgrade from an older package that did not write the flag file.
-            systemctl start carbonio-oidc || true
-            echo "carbonio-oidc-connector: service restarted (upgrade from $2)."
         fi
 
         # Reload nginx
@@ -108,19 +109,12 @@ EOF
 # --- DEBIAN/prerm ---
 cat > "${ROOT}/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
-set -e
 
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
 case "$1" in
     upgrade)
-        # On upgrade: remember if service was active, then stop it.
-        # postinst will restore the state using the flag file.
-        if systemctl is-active --quiet carbonio-oidc; then
-            touch /run/carbonio-oidc-was-active
-        else
-            rm -f /run/carbonio-oidc-was-active
-        fi
+        # Stop the service before files are replaced.
         systemctl stop carbonio-oidc 2>/dev/null || true
         ;;
     remove|purge|deconfigure)
