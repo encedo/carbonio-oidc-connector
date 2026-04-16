@@ -10,8 +10,8 @@ WorkingDirectory=/opt/zextras/oidc
 ExecStart=/usr/bin/python3 /opt/zextras/oidc/server.py
 Restart=on-failure
 RestartSec=5
-StandardOutput=null
-StandardError=null
+StandardOutput=journal
+StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

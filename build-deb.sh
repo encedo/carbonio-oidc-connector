@@ -46,44 +46,48 @@ EOF
 # --- DEBIAN/postinst ---
 cat > "${ROOT}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
+exec > >(tee -a /tmp/carbonio-oidc-postinst.log) 2>&1
+set -x
 
 OIDC_DIR="/opt/zextras/oidc"
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
-case "$1" in
-    configure)
-        chown -R zextras:zextras "${OIDC_DIR}"
-        chmod 750 "${OIDC_DIR}"
-        chmod 644 "${OIDC_DIR}"/*.py
-        chmod 640 "${OIDC_DIR}/config.json.example"
-        chown zextras:zextras "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
+echo "postinst called with: $*"
 
-        if [ ! -f "${OIDC_DIR}/config.json" ]; then
-            cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
-            chmod 640 "${OIDC_DIR}/config.json"
-            chown zextras:zextras "${OIDC_DIR}/config.json"
-            echo "carbonio-oidc-connector: edit ${OIDC_DIR}/config.json before starting the service."
-        fi
+chown -R zextras:zextras "${OIDC_DIR}"
+chmod 750 "${OIDC_DIR}"
+chmod 644 "${OIDC_DIR}"/*.py
+chmod 640 "${OIDC_DIR}/config.json.example"
+chown zextras:zextras "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
 
-        touch /var/log/carbonio-oidc.log
-        chown zextras:zextras /var/log/carbonio-oidc.log
+if [ ! -f "${OIDC_DIR}/config.json" ]; then
+    cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
+    chmod 640 "${OIDC_DIR}/config.json"
+    chown zextras:zextras "${OIDC_DIR}/config.json"
+    echo "carbonio-oidc-connector: edit ${OIDC_DIR}/config.json before starting the service."
+fi
 
-        rm -rf "${OIDC_DIR}/__pycache__"
+touch /var/log/carbonio-oidc.log
+chown zextras:zextras /var/log/carbonio-oidc.log
 
-        systemctl daemon-reload
-        systemctl enable carbonio-oidc
-        systemctl stop carbonio-oidc 2>/dev/null || true
-        systemctl start carbonio-oidc
-        echo "carbonio-oidc-connector: service started."
+rm -rf "${OIDC_DIR}/__pycache__"
 
-        if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
-            su - zextras -c "/opt/zextras/common/sbin/nginx -s reload"
-        else
-            echo "WARNING: nginx config test failed — reload skipped. Check configuration."
-        fi
-        ;;
-esac
+systemctl daemon-reload
+systemctl enable carbonio-oidc || true
+systemctl stop carbonio-oidc 2>/dev/null || true
+systemctl start carbonio-oidc || true
+echo "postinst: systemctl start exit code: $?"
 
+sleep 2
+systemctl is-active carbonio-oidc && echo "postinst: service is ACTIVE" || echo "postinst: service is INACTIVE — check journalctl -u carbonio-oidc"
+
+if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
+    su - zextras -c "/opt/zextras/common/sbin/nginx -s reload" || true
+else
+    echo "WARNING: nginx config test failed — reload skipped."
+fi
+
+echo "postinst: done."
 exit 0
 EOF
 
