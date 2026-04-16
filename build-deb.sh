@@ -47,13 +47,8 @@ EOF
 cat > "${ROOT}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
 
-LOG=/tmp/carbonio-oidc-postinst.log
 OIDC_DIR="/opt/zextras/oidc"
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
-
-log() { echo "[postinst] $*" | tee -a "$LOG"; }
-
-log "called with: $*"
 
 chown -R zextras:zextras "${OIDC_DIR}"
 chmod 750 "${OIDC_DIR}"
@@ -65,7 +60,7 @@ if [ ! -f "${OIDC_DIR}/config.json" ]; then
     cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
     chmod 640 "${OIDC_DIR}/config.json"
     chown zextras:zextras "${OIDC_DIR}/config.json"
-    log "edit ${OIDC_DIR}/config.json before starting the service."
+    echo "carbonio-oidc-connector: edit ${OIDC_DIR}/config.json before starting the service."
 fi
 
 touch /var/log/carbonio-oidc.log
@@ -73,32 +68,17 @@ chown zextras:zextras /var/log/carbonio-oidc.log
 
 rm -rf "${OIDC_DIR}/__pycache__"
 
-log "running daemon-reload..."
 systemctl daemon-reload
-
-log "enabling service..."
-systemctl enable carbonio-oidc 2>&1 | tee -a "$LOG" || true
-
-log "stopping service..."
-systemctl stop carbonio-oidc 2>&1 | tee -a "$LOG" || true
-
-log "starting service..."
-systemctl start carbonio-oidc 2>&1 | tee -a "$LOG"
-RC=$?
-log "systemctl start exit code: $RC"
-
-sleep 2
-STATUS=$(systemctl is-active carbonio-oidc 2>&1)
-log "service status after 2s: $STATUS"
-journalctl -u carbonio-oidc -n 20 --no-pager 2>&1 | tee -a "$LOG"
+systemctl enable carbonio-oidc || true
+systemctl stop carbonio-oidc 2>/dev/null || true
+systemctl start carbonio-oidc || true
 
 if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
-    su - zextras -c "/opt/zextras/common/sbin/nginx -s reload" 2>&1 | tee -a "$LOG" || true
+    su - zextras -c "/opt/zextras/common/sbin/nginx -s reload" || true
 else
-    log "WARNING: nginx config test failed — reload skipped."
+    echo "WARNING: nginx config test failed — reload skipped."
 fi
 
-log "done. Full log: $LOG"
 exit 0
 EOF
 
