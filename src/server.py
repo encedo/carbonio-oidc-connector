@@ -23,7 +23,7 @@ import oidc
 import callback
 import jwks
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 _server_config = {}
 
