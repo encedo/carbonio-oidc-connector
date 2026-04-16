@@ -41,91 +41,13 @@ jobs:
 
       - name: Build .deb
         run: |
-          VERSION="${{ steps.version.outputs.build }}"
-          PKG="carbonio-oidc-connector"
-          DEB="${{ steps.version.outputs.deb }}"
-          ROOT="$(mktemp -d)/${PKG}_${VERSION}_all"
-
-          install -dm755 "${ROOT}/DEBIAN"
-          install -dm755 "${ROOT}/opt/zextras/oidc"
-          install -dm755 "${ROOT}/opt/zextras/conf/nginx/extensions"
-          install -dm755 "${ROOT}/etc/systemd/system"
-
-          cp src/*.py "${ROOT}/opt/zextras/oidc/"
-          cp config.json.example "${ROOT}/opt/zextras/oidc/config.json.example"
-          cp nginx/upstream-oidc.conf "${ROOT}/opt/zextras/conf/nginx/extensions/"
-          cp nginx/backend-oidc.conf  "${ROOT}/opt/zextras/conf/nginx/extensions/"
-          cp systemd/carbonio-oidc.service "${ROOT}/etc/systemd/system/"
-
-          cat > "${ROOT}/DEBIAN/control" << EOF
-          Package: ${PKG}
-          Version: ${VERSION}
-          Architecture: all
-          Maintainer: Encedo <contact@encedo.com>
-          Depends: python3 (>= 3.8), python3-cryptography
-          Section: mail
-          Priority: optional
-          Homepage: https://github.com/encedo/carbonio-oidc-connector
-          Description: OIDC Relying Party sidecar for Carbonio CE
-           Adds SSO login via any OIDC Provider as an alternative to
-           username/password authentication in Carbonio CE (Zimbra-based).
-           Supports EdDSA, RS256/384/512, ES256/384/512 signed JWTs.
-           Survives apt upgrade of all Carbonio packages.
-          EOF
-
-          cat > "${ROOT}/DEBIAN/postinst" << 'POSTINST'
-          #!/bin/bash
-          set -e
-          OIDC_DIR="/opt/zextras/oidc"
-          NGINX_EXT="/opt/zextras/conf/nginx/extensions"
-          case "$1" in
-              configure)
-                  chown -R zextras:zextras "${OIDC_DIR}"
-                  chmod 750 "${OIDC_DIR}"
-                  chmod 644 "${OIDC_DIR}"/*.py
-                  chmod 640 "${OIDC_DIR}/config.json.example"
-                  chown zextras:zextras "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
-                  if [ ! -f "${OIDC_DIR}/config.json" ]; then
-                      cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
-                      chmod 640 "${OIDC_DIR}/config.json"
-                      chown zextras:zextras "${OIDC_DIR}/config.json"
-                      echo "carbonio-oidc-connector: edit ${OIDC_DIR}/config.json before starting the service."
-                  fi
-                  touch /var/log/carbonio-oidc.log
-                  chown zextras:zextras /var/log/carbonio-oidc.log
-                  systemctl daemon-reload
-                  systemctl enable carbonio-oidc
-                  if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
-                      su - zextras -c "/opt/zextras/common/sbin/nginx -s reload"
-                  else
-                      echo "WARNING: nginx config test failed — reload skipped."
-                  fi
-                  ;;
-          esac
-          exit 0
-          POSTINST
-
-          cat > "${ROOT}/DEBIAN/prerm" << 'PRERM'
-          #!/bin/bash
-          set -e
-          NGINX_EXT="/opt/zextras/conf/nginx/extensions"
-          case "$1" in
-              remove|purge|upgrade|deconfigure)
-                  systemctl stop carbonio-oidc 2>/dev/null || true
-                  systemctl disable carbonio-oidc 2>/dev/null || true
-                  rm -f "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
-                  su - zextras -c "/opt/zextras/common/sbin/nginx -s reload" 2>/dev/null || true
-                  systemctl daemon-reload
-                  ;;
-          esac
-          exit 0
-          PRERM
-
-          chmod 755 "${ROOT}/DEBIAN/postinst" "${ROOT}/DEBIAN/prerm"
-          sed -i 's/^          //' "${ROOT}/DEBIAN/control"
-
-          dpkg-deb --build --root-owner-group "${ROOT}"
-          mv "$(dirname "${ROOT}")/${PKG}_${VERSION}_all.deb" "${DEB}"
+          # Temporarily set the version string to include the build number
+          # so build-deb.sh picks it up via the VERSION grep.
+          BUILD="${{ steps.version.outputs.build }}"
+          sed -i "s/^VERSION = .*/VERSION = \"${BUILD}\"/" src/server.py
+          bash build-deb.sh
+          # Rename to the expected artifact name
+          mv "carbonio-oidc-connector_${BUILD}_all.deb" "${{ steps.version.outputs.deb }}" 2>/dev/null || true
 
       - name: Sign .deb
         env:
