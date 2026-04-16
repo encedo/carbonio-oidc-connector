@@ -46,55 +46,36 @@ EOF
 # --- DEBIAN/postinst ---
 cat > "${ROOT}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
-# No set -e: every critical command handles errors explicitly.
 
 OIDC_DIR="/opt/zextras/oidc"
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
 case "$1" in
     configure)
-        # Detect fresh install BEFORE we potentially create config.json.
-        # On a fresh install config.json does not yet exist; on upgrade it does.
-        FRESH_INSTALL=0
-        [ ! -f "${OIDC_DIR}/config.json" ] && FRESH_INSTALL=1
-
-        # Set ownership and permissions
         chown -R zextras:zextras "${OIDC_DIR}"
         chmod 750 "${OIDC_DIR}"
         chmod 644 "${OIDC_DIR}"/*.py
         chmod 640 "${OIDC_DIR}/config.json.example"
         chown zextras:zextras "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
 
-        # Install config.json if not already present
-        if [ "$FRESH_INSTALL" = "1" ]; then
+        if [ ! -f "${OIDC_DIR}/config.json" ]; then
             cp "${OIDC_DIR}/config.json.example" "${OIDC_DIR}/config.json"
             chmod 640 "${OIDC_DIR}/config.json"
             chown zextras:zextras "${OIDC_DIR}/config.json"
             echo "carbonio-oidc-connector: edit ${OIDC_DIR}/config.json before starting the service."
         fi
 
-        # Create log file
         touch /var/log/carbonio-oidc.log
         chown zextras:zextras /var/log/carbonio-oidc.log
 
-        # Clear Python bytecode cache so the new .py files are picked up
         rm -rf "${OIDC_DIR}/__pycache__"
 
         systemctl daemon-reload
         systemctl enable carbonio-oidc
+        systemctl stop carbonio-oidc 2>/dev/null || true
+        systemctl start carbonio-oidc
+        echo "carbonio-oidc-connector: service started."
 
-        # On upgrade: always restart.  We detect upgrade by the presence of
-        # config.json (checked before we may have just created it above).
-        # On fresh install: do not start — user must configure config.json first.
-        # Also honour flag left by prerm for edge cases (e.g. same-version reinstall
-        # on systems where dpkg passes empty $2 to postinst configure).
-        rm -f /run/carbonio-oidc-was-active
-        if [ "$FRESH_INSTALL" = "0" ]; then
-            systemctl restart carbonio-oidc || true
-            echo "carbonio-oidc-connector: service restarted."
-        fi
-
-        # Reload nginx
         if su - zextras -c "/opt/zextras/common/sbin/nginx -t" 2>/dev/null; then
             su - zextras -c "/opt/zextras/common/sbin/nginx -s reload"
         else
