@@ -75,11 +75,14 @@ case "$1" in
         # Clear Python bytecode cache so the new .py files are picked up
         rm -rf "${OIDC_DIR}/__pycache__"
 
-        # Enable and restart if already running (upgrade), otherwise just enable
         systemctl daemon-reload
         systemctl enable carbonio-oidc
-        if systemctl is-active --quiet carbonio-oidc; then
-            systemctl restart carbonio-oidc
+
+        # On upgrade the service was stopped by prerm — restart it.
+        # On fresh install do not start — user must configure config.json first.
+        if [ -n "$2" ]; then
+            # $2 is set to the old version string during upgrade
+            systemctl start carbonio-oidc
             echo "carbonio-oidc-connector: service restarted."
         fi
 
@@ -103,13 +106,15 @@ set -e
 NGINX_EXT="/opt/zextras/conf/nginx/extensions"
 
 case "$1" in
-    remove|purge|upgrade|deconfigure)
-        # Stop and disable service
+    upgrade)
+        # On upgrade: just stop the service — nginx confs stay in place
+        systemctl stop carbonio-oidc 2>/dev/null || true
+        ;;
+    remove|purge|deconfigure)
+        # On removal: stop, disable, remove nginx extensions and reload nginx
         systemctl stop carbonio-oidc 2>/dev/null || true
         systemctl disable carbonio-oidc 2>/dev/null || true
 
-        # Remove nginx extensions before dpkg removes the package files,
-        # then reload nginx so it stops serving /oidc/ routes
         rm -f "${NGINX_EXT}/upstream-oidc.conf" "${NGINX_EXT}/backend-oidc.conf"
         su - zextras -c "/opt/zextras/common/sbin/nginx -s reload" 2>/dev/null || true
 
