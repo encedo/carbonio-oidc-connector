@@ -78,12 +78,19 @@ case "$1" in
         systemctl daemon-reload
         systemctl enable carbonio-oidc
 
-        # On upgrade: restore previous running state (prerm saved it via flag file).
-        # On fresh install: do not start — user must configure config.json first.
+        # On upgrade: restore previous running state.
+        # - New prerm sets /run/carbonio-oidc-was-active when service was active.
+        # - Old prerm (or missing prerm) may not set the flag, so fall back to
+        #   detecting an upgrade via $2 (previous version string) and start anyway.
+        # On fresh install ($2 is empty): do not start — user must configure first.
         if [ -f /run/carbonio-oidc-was-active ]; then
             rm -f /run/carbonio-oidc-was-active
             systemctl start carbonio-oidc
             echo "carbonio-oidc-connector: service restarted."
+        elif [ -n "$2" ]; then
+            # Upgrade from an older package that did not write the flag file.
+            systemctl start carbonio-oidc || true
+            echo "carbonio-oidc-connector: service restarted (upgrade from $2)."
         fi
 
         # Reload nginx
