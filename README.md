@@ -261,6 +261,102 @@ Remove: `sudo dpkg -r carbonio-oidc-connector`
 
 ---
 
+## Architecture
+
+### Component overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Carbonio CE server                                             │
+│                                                                 │
+│  ┌──────────────┐    /oidc/*     ┌──────────────────────────┐  │
+│  │ carbonio     │ ─────────────► │ carbonio-oidc-connector   │  │
+│  │ nginx proxy  │ ◄───────────── │ Python 3 / stdlib only   │  │
+│  │ :443         │                │ 127.0.0.1:8754           │  │
+│  └──────┬───────┘                └───────────┬──────────────┘  │
+│         │ /service/preauth                   │                  │
+│  ┌──────▼───────┐                            │ OIDC / JWKS     │
+│  │ carbonio     │                            │ (HTTPS outbound)│
+│  │ mailbox      │               ┌────────────▼──────────────┐  │
+│  └──────────────┘               │      OIDC Provider        │  │
+│                                 │  (Encedo HSM / Keycloak / │  │
+└─────────────────────────────────│   Google / Okta / etc.)   │──┘
+                                  └───────────────────────────┘
+```
+
+### Module breakdown
+
+| Module | Responsibility |
+|---|---|
+| `server.py` | Entry point. `ThreadingHTTPServer` (stdlib), URL routing, graceful shutdown on SIGTERM/SIGINT |
+| `config.py` | Loads and validates `config.json`. Fetches OIDC discovery (`/.well-known/openid-configuration`) in a background thread at startup; retries synchronously on first `/oidc/authorize` if cache is empty |
+| `oidc.py` | `GET /oidc/authorize` — generates PKCE S256 `code_verifier`/`code_challenge`, `state`, stores in session, redirects browser to OIDC Provider |
+| `callback.py` | `GET /oidc/callback` — validates `state`, exchanges `code` for tokens, verifies `id_token` signature and claims, extracts account email, calls `preauth.py`, issues PreAuth redirect to Carbonio |
+| `jwks.py` | Fetches JWKS from provider, caches public keys by `kid`. Supports EdDSA/Ed25519 (OKP), RSA (RS256/384/512), EC (ES256/384/512). Prefetched in background after discovery |
+| `session.py` | In-memory session store with TTL-based expiry. `secretsToken_urlsafe(32)` session IDs. Background cleanup thread. Cookie: `HttpOnly; Secure; SameSite=Lax` |
+| `preauth.py` | Generates Carbonio/Zimbra PreAuth HmacSHA1 token (`account\|name\|expires\|timestamp`). Builds `/service/preauth?...` redirect URL |
+
+### Full request flow (detailed)
+
+```
+1.  Browser → GET /oidc/authorize
+      oidc.py:
+        - load discovery (config.py cache or sync retry)
+        - generate code_verifier = token_urlsafe(64)
+        - code_challenge = base64url(sha256(code_verifier))
+        - state = token_urlsafe(32)
+        - session.create({state, code_verifier, [domain_hint]})
+        - Set-Cookie: __oidc_session=<id>; HttpOnly; Secure; SameSite=Lax
+        - 302 → OP authorization_endpoint?response_type=code&...&code_challenge=...
+
+2.  User authenticates at OIDC Provider
+
+3.  OP → 302 → /oidc/callback?code=AUTH_CODE&state=STATE
+      callback.py:
+        a. Read __oidc_session cookie → session.get(id)
+        b. Validate state matches session.state (CSRF check)
+        c. POST token_endpoint: code + code_verifier + client_secret_post
+        d. Parse id_token (header.payload.signature, no library)
+        e. jwks.get_key(kid) → fetch/cache JWKS if needed
+        f. Verify signature (Ed25519 / RSA / EC via `cryptography`)
+        g. Validate: exp > now, iss == discovery.issuer, aud == client_id
+        h. Extract account from claim (default: email, fallback: preferred_username)
+        i. Lookup preauth_key for domain (from config.domains)
+        j. preauth.preauth_redirect_url() → HmacSHA1 token
+        k. session.delete(id)
+        l. 302 → /service/preauth?account=...&preauth=...&timestamp=...
+           Carbonio logs user in → 302 → /carbonio/
+```
+
+### Threading model
+
+- Main thread: `ThreadingHTTPServer.serve_forever()` — one thread per HTTP request
+- `oidc-discovery` daemon thread: fetches OIDC discovery at startup
+- `jwks-prefetch` daemon thread: fetches JWKS after discovery completes
+- `session-cleanup` daemon thread: removes expired sessions every 60 s
+- All shared state (`_discovery`, `_store`, JWKS cache) protected by `threading.Lock`
+
+### nginx integration
+
+Two files are installed into `/opt/zextras/conf/nginx/extensions/` (Carbonio's include directory):
+
+```nginx
+# upstream-oidc.conf
+upstream oidc_connector {
+    server 127.0.0.1:8754;
+}
+
+# backend-oidc.conf
+location /oidc/ {
+    proxy_pass http://oidc_connector;
+    ...
+}
+```
+
+These files survive `apt upgrade carbonio-proxy` because Carbonio CE only ships its own extension files, never deletes unknown ones.
+
+---
+
 ## Security notes
 
 - PKCE S256 is always used — authorization code interception attacks are mitigated
